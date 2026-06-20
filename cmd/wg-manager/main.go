@@ -59,6 +59,8 @@ func main() {
 	mux.HandleFunc("GET /peer/config", app.requireAuth(app.handleConfig))
 	mux.HandleFunc("GET /peer/edit", app.requireAuth(app.handleEditPage))
 	mux.HandleFunc("POST /peer/update", app.requireAuth(app.handleUpdatePeer))
+	mux.HandleFunc("GET /stats", app.requireAuth(app.handleStats))
+	mux.HandleFunc("GET /stats/stream", app.requireAuth(app.handleStatsStream))
 
 	log.Println("listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", mux))

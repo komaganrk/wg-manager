@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Stats — WireGuard Manager</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f3f4f6;
+      margin: 0;
+      padding: 1.5rem 1rem;
+      color: #111;
+    }
+    .page { max-width: 960px; margin: 0 auto; }
+    .back { display: inline-flex; align-items: center; color: #6b7280; text-decoration: none; font-size: .875rem; margin-bottom: 1rem; }
+    .back:hover { color: #374151; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.25rem; }
+    h1 { margin: 0; font-size: 1.3rem; }
+    .badge {
+      font-size: .75rem;
+      padding: .2rem .55rem;
+      border-radius: 999px;
+      font-weight: 500;
+    }
+    .badge-live { background: #dcfce7; color: #15803d; }
+    .badge-off  { background: #f3f4f6; color: #9ca3af; }
+    .badge-err  { background: #fef2f2; color: #b91c1c; }
+    .card { background: #fff; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.08); padding: 1.25rem 1.5rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: #6b7280; padding: .4rem .5rem; border-bottom: 1px solid #e5e7eb; }
+    td { padding: .65rem .5rem; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    .mono { font-family: monospace; font-size: .85rem; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+    .dot-ok   { background: #22c55e; }
+    .dot-warn { background: #f59e0b; }
+    .dot-off  { background: #d1d5db; }
+    .legend { display: flex; gap: 1rem; font-size: .75rem; color: #6b7280; margin-top: .5rem; }
+    .legend span { display: inline-flex; align-items: center; gap: .3rem; }
+    .swatch { display: inline-block; width: 10px; height: 3px; border-radius: 2px; }
+    .empty { text-align: center; color: #9ca3af; padding: 2rem 0; font-size: .9rem; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <a href="/" class="back">← Back to peers</a>
+    <div class="topbar">
+      <h1>Live Stats</h1>
+      <span id="badge" class="badge badge-off">connecting…</span>
+    </div>
+
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:20px"></th>
+            <th>Name</th>
+            <th>Endpoint</th>
+            <th>Last handshake</th>
+            <th>Total RX</th>
+            <th>Total TX</th>
+            <th>Rate (3s)</th>
+          </tr>
+        </thead>
+        <tbody id="tbody">
+          <tr><td colspan="7" class="empty">Waiting for data…</td></tr>
+        </tbody>
+      </table>
+      <div class="legend">
+        <span><span class="swatch" style="background:#6366f1"></span> RX</span>
+        <span><span class="swatch" style="background:#22c55e"></span> TX</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const MAX_PTS  = 40;
+    const INTERVAL = 3;
+    const peers    = new Map(); // pubkey → {dot,name,ep,hs,rx,tx,canvas,ctx,prevRx,prevTx,rxR,txR}
+
+    function fmtBytes(b) {
+      if (b < 1024)             return b + ' B';
+      if (b < 1048576)          return (b / 1024).toFixed(1) + ' KiB';
+      if (b < 1073741824)       return (b / 1048576).toFixed(1) + ' MiB';
+      return (b / 1073741824).toFixed(2) + ' GiB';
+    }
+
+    function fmtRate(bps) {
+      if (bps < 1024)    return bps.toFixed(0) + ' B/s';
+      if (bps < 1048576) return (bps / 1024).toFixed(1) + ' KB/s';
+      return (bps / 1048576).toFixed(1) + ' MB/s';
+    }
+
+    function fmtAgo(ts) {
+      if (!ts) return '—';
+      const s = Math.floor(Date.now() / 1000) - ts;
+      if (s < 0)     return 'just now';
+      if (s < 60)    return s + 's ago';
+      if (s < 3600)  return Math.floor(s / 60) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      return Math.floor(s / 86400) + 'd ago';
+    }
+
+    function drawSparkline(d) {
+      const ctx = d.ctx, W = d.canvas.width, H = d.canvas.height;
+      ctx.clearRect(0, 0, W, H);
+      const max = Math.max(...d.rxR, ...d.txR, 1);
+
+      [[d.rxR, '#6366f1'], [d.txR, '#22c55e']].forEach(([data, color]) => {
+        if (data.length < 2) return;
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = 1.5;
+        ctx.lineJoin    = 'round';
+        ctx.beginPath();
+        data.forEach((v, i) => {
+          const x = (i / (MAX_PTS - 1)) * W;
+          const y = H - 2 - (v / max) * (H - 4);
+          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      });
+    }
+
+    function ensureRow(peer) {
+      if (peers.has(peer.pubkey)) return;
+
+      const tbody = document.getElementById('tbody');
+      if (tbody.querySelector('.empty')) tbody.innerHTML = '';
+
+      const canvas = document.createElement('canvas');
+      canvas.width  = 120;
+      canvas.height = 36;
+
+      const tr  = document.createElement('tr');
+      const dot = document.createElement('span');
+      dot.className = 'dot dot-off';
+
+      const cells = {
+        dot:  document.createElement('td'),
+        name: document.createElement('td'),
+        ep:   document.createElement('td'),
+        hs:   document.createElement('td'),
+        rx:   document.createElement('td'),
+        tx:   document.createElement('td'),
+        rate: document.createElement('td'),
+      };
+
+      cells.dot.appendChild(dot);
+      cells.ep.className = cells.rx.className = cells.tx.className = cells.rate.className = 'mono';
+      cells.rate.appendChild(canvas);
+
+      Object.values(cells).forEach(td => tr.appendChild(td));
+      tbody.appendChild(tr);
+
+      peers.set(peer.pubkey, {
+        dot, name: cells.name, ep: cells.ep, hs: cells.hs,
+        rx: cells.rx, tx: cells.tx,
+        canvas, ctx: canvas.getContext('2d'),
+        prevRx: null, prevTx: null,
+        rxR: [], txR: [],
+      });
+    }
+
+    function update(payload) {
+      if (payload.error) {
+        setBadge('err', '⚠ ' + payload.error);
+        return;
+      }
+      (payload.peers || []).forEach(peer => {
+        ensureRow(peer);
+        const d = peers.get(peer.pubkey);
+
+        let rxRate = 0, txRate = 0;
+        if (d.prevRx !== null) {
+          rxRate = Math.max(0, peer.rx_bytes - d.prevRx) / INTERVAL;
+          txRate = Math.max(0, peer.tx_bytes - d.prevTx) / INTERVAL;
+        }
+        d.prevRx = peer.rx_bytes;
+        d.prevTx = peer.tx_bytes;
+
+        d.rxR.push(rxRate); if (d.rxR.length > MAX_PTS) d.rxR.shift();
+        d.txR.push(txRate); if (d.txR.length > MAX_PTS) d.txR.shift();
+
+        const ago = peer.last_handshake
+          ? Math.floor(Date.now() / 1000) - peer.last_handshake
+          : Infinity;
+
+        d.dot.className = 'dot ' + (ago < 180 ? 'dot-ok' : ago < 300 ? 'dot-warn' : 'dot-off');
+        d.name.textContent = peer.name || peer.pubkey.slice(0, 8) + '…';
+        d.ep.textContent   = peer.endpoint !== '(none)' ? peer.endpoint : '—';
+        d.hs.textContent   = peer.last_handshake ? fmtAgo(peer.last_handshake) : 'never';
+        d.rx.textContent   = fmtBytes(peer.rx_bytes);
+        d.tx.textContent   = fmtBytes(peer.tx_bytes);
+        d.rate.replaceChildren(d.canvas);
+
+        // inline rate label under canvas
+        const rateLabel = fmtRate(rxRate) + ' ↓  ' + fmtRate(txRate) + ' ↑';
+        if (!d.rateEl) {
+          d.rateEl = document.createElement('div');
+          d.rateEl.style.cssText = 'font-size:.7rem;color:#9ca3af;margin-top:2px';
+          d.rate.appendChild(d.rateEl);
+        }
+        d.rateEl.textContent = rateLabel;
+        drawSparkline(d);
+      });
+    }
+
+    function setBadge(type, text) {
+      const el = document.getElementById('badge');
+      el.className = 'badge badge-' + type;
+      el.textContent = text;
+    }
+
+    const es = new EventSource('/stats/stream');
+    es.onopen    = ()  => setBadge('live', '● live');
+    es.onerror   = ()  => setBadge('err',  '○ disconnected');
+    es.onmessage = (e) => {
+      try { update(JSON.parse(e.data)); } catch (err) { console.error(err); }
+    };
+
+    // Refresh relative timestamps every second without waiting for SSE
+    setInterval(() => {
+      peers.forEach((d, pubkey) => {
+        if (d._lastHandshake) d.hs.textContent = fmtAgo(d._lastHandshake);
+      });
+    }, 1000);
+  </script>
+</body>
+</html>

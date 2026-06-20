@@ -98,9 +98,12 @@
   <div class="page">
     <div class="topbar">
       <h1>WireGuard Manager</h1>
-      <form method="POST" action="/logout">
-        <button class="logout-btn">Logout</button>
-      </form>
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <a href="/stats" class="btn btn-neutral" style="font-size:.85rem">Live Stats</a>
+        <form method="POST" action="/logout">
+          <button class="logout-btn">Logout</button>
+        </form>
+      </div>
     </div>
 
     {{if .Error}}<div class="error">{{.Error}}</div>{{end}}

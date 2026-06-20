@@ -109,15 +109,25 @@ func (k *K8sClient) WGSetAllowedIPs(ctx context.Context, pubKey, allowedIPs stri
 	return k.execInWGPod(ctx, []string{"wg", "set", "wg0", "peer", pubKey, "allowed-ips", allowedIPs}, nil)
 }
 
+// WGShowDump returns the output of `wg show wg0 dump` from the running WireGuard pod.
+func (k *K8sClient) WGShowDump(ctx context.Context) (string, error) {
+	return k.runInWGPod(ctx, []string{"wg", "show", "wg0", "dump"}, nil)
+}
+
 func (k *K8sClient) execInWGPod(ctx context.Context, cmd []string, stdin io.Reader) error {
+	_, err := k.runInWGPod(ctx, cmd, stdin)
+	return err
+}
+
+func (k *K8sClient) runInWGPod(ctx context.Context, cmd []string, stdin io.Reader) (string, error) {
 	pods, err := k.client.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "app=wireguard",
 	})
 	if err != nil {
-		return fmt.Errorf("list pods: %w", err)
+		return "", fmt.Errorf("list pods: %w", err)
 	}
 	if len(pods.Items) == 0 {
-		return fmt.Errorf("no wireguard pod found in namespace %s", k.namespace)
+		return "", fmt.Errorf("no wireguard pod found in namespace %s", k.namespace)
 	}
 
 	req := k.client.CoreV1().RESTClient().Post().
@@ -134,7 +144,7 @@ func (k *K8sClient) execInWGPod(ctx context.Context, cmd []string, stdin io.Read
 
 	executor, err := remotecommand.NewSPDYExecutor(k.config, "POST", req.URL())
 	if err != nil {
-		return fmt.Errorf("create executor: %w", err)
+		return "", fmt.Errorf("create executor: %w", err)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -143,7 +153,7 @@ func (k *K8sClient) execInWGPod(ctx context.Context, cmd []string, stdin io.Read
 		Stdout: &stdout,
 		Stderr: &stderr,
 	}); err != nil {
-		return fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())
+		return "", fmt.Errorf("exec: %w (stderr: %s)", err, stderr.String())
 	}
-	return nil
+	return stdout.String(), nil
 }

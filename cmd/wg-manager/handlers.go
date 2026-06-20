@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -320,6 +322,98 @@ func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// ── live stats ────────────────────────────────────────────────────────────────
+
+type peerStat struct {
+	Name          string `json:"name"`
+	PublicKey     string `json:"pubkey"`
+	Endpoint      string `json:"endpoint"`
+	LastHandshake int64  `json:"last_handshake"`
+	RxBytes       int64  `json:"rx_bytes"`
+	TxBytes       int64  `json:"tx_bytes"`
+}
+
+type statsPayload struct {
+	Ts    int64      `json:"ts"`
+	Peers []peerStat `json:"peers"`
+}
+
+func (a *App) handleStats(w http.ResponseWriter, r *http.Request) {
+	a.render(w, "stats.html", nil)
+}
+
+func (a *App) handleStatsStream(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+
+	send := func() {
+		cfg, err := a.k8s.GetConfig(ctx)
+		if err != nil {
+			fmt.Fprintf(w, "data: {\"error\":%q}\n\n", err.Error())
+			flusher.Flush()
+			return
+		}
+		names := make(map[string]string, len(cfg.Peers))
+		for _, p := range cfg.Peers {
+			names[p.PublicKey] = p.Name
+		}
+		dump, err := a.k8s.WGShowDump(ctx)
+		if err != nil {
+			fmt.Fprintf(w, "data: {\"error\":%q}\n\n", err.Error())
+			flusher.Flush()
+			return
+		}
+		payload := parseDump(dump, names)
+		data, _ := json.Marshal(payload)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	send() // immediate first push
+
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			send()
+		}
+	}
+}
+
+// parseDump parses `wg show wg0 dump` tab-separated output.
+// Peer lines have 8 fields; the interface line has 4 — skip everything else.
+func parseDump(dump string, names map[string]string) statsPayload {
+	var peers []peerStat
+	for _, line := range strings.Split(strings.TrimSpace(dump), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 8 {
+			continue
+		}
+		p := peerStat{
+			PublicKey: f[0],
+			Endpoint:  f[2],
+			Name:      names[f[0]],
+		}
+		p.LastHandshake, _ = strconv.ParseInt(f[4], 10, 64)
+		p.RxBytes, _ = strconv.ParseInt(f[5], 10, 64)
+		p.TxBytes, _ = strconv.ParseInt(f[6], 10, 64)
+		peers = append(peers, p)
+	}
+	return statsPayload{Ts: time.Now().Unix(), Peers: peers}
 }
 
 func buildPeerConfig(p Peer, serverPubKey, endpoint, port string) string {
