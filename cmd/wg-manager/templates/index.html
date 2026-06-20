@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WireGuard Manager</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f3f4f6;
+      margin: 0;
+      padding: 1.5rem 1rem;
+      color: #111;
+    }
+    .page { max-width: 860px; margin: 0 auto; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+    }
+    h1 { margin: 0; font-size: 1.3rem; }
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .card-title { font-weight: 600; font-size: .9rem; color: #374151; margin-bottom: 1rem; }
+    .error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 6px;
+      color: #b91c1c;
+      font-size: .875rem;
+      padding: .5rem .75rem;
+      margin-bottom: 1rem;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th {
+      text-align: left;
+      font-size: .75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: #6b7280;
+      padding: .4rem .5rem;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    td { padding: .7rem .5rem; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    .mono { font-family: monospace; font-size: .9rem; color: #374151; }
+    .actions { display: flex; gap: .4rem; align-items: center; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      padding: .3rem .65rem;
+      border-radius: 5px;
+      border: none;
+      font-size: .8rem;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: none;
+      line-height: 1.4;
+    }
+    .btn-primary { background: #4f46e5; color: #fff; }
+    .btn-primary:hover { background: #4338ca; }
+    .btn-neutral { background: #e5e7eb; color: #374151; }
+    .btn-neutral:hover { background: #d1d5db; }
+    .btn-danger { background: #ef4444; color: #fff; }
+    .btn-danger:hover { background: #dc2626; }
+    .empty { color: #9ca3af; text-align: center; padding: 2rem 0; font-size: .9rem; }
+    .add-row { display: flex; gap: .5rem; }
+    .add-row input {
+      flex: 1;
+      padding: .45rem .75rem;
+      font-size: .9rem;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      outline: none;
+    }
+    .add-row input:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,.2); }
+    .logout-btn {
+      background: #e5e7eb;
+      color: #374151;
+      border: none;
+      padding: .35rem .75rem;
+      border-radius: 6px;
+      font-size: .85rem;
+      cursor: pointer;
+    }
+    .logout-btn:hover { background: #d1d5db; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="topbar">
+      <h1>WireGuard Manager</h1>
+      <form method="POST" action="/logout">
+        <button class="logout-btn">Logout</button>
+      </form>
+    </div>
+
+    {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+
+    <div class="card">
+      <div class="card-title">Peers</div>
+      {{if .Peers}}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>IP address</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Peers}}
+          <tr>
+            <td>{{.Name}}</td>
+            <td class="mono">{{.IP}}</td>
+            <td>
+              <div class="actions">
+                <a href="/peer/qr?name={{.Name}}" class="btn btn-primary">QR</a>
+                <a href="/peer/config?name={{.Name}}" class="btn btn-neutral">Config</a>
+                <a href="/peer/edit?name={{.Name}}" class="btn btn-neutral">Edit</a>
+                <form method="POST" action="/peer/delete"
+                      onsubmit="return confirm('Delete peer “{{.Name}}”?')">
+                  <input type="hidden" name="name" value="{{.Name}}">
+                  <button type="submit" class="btn btn-danger">Delete</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+      {{else}}
+      <p class="empty">No peers yet — add one below.</p>
+      {{end}}
+    </div>
+
+    <div class="card">
+      <div class="card-title">Add peer</div>
+      <form method="POST" action="/peer/add" class="add-row">
+        <input type="text" name="name" placeholder="Peer name (e.g. laptop, phone)" required
+               pattern="[A-Za-z0-9._-]+" title="Letters, digits, dots, hyphens, underscores only">
+        <button type="submit" class="btn btn-primary">Add</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

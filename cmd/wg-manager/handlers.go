@@ -1,0 +1,340 @@
+package main
+
+import (
+	"encoding/base64"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"strings"
+	"time"
+
+	qrcode "github.com/skip2/go-qrcode"
+)
+
+type loginData struct {
+	Error string
+}
+
+type indexData struct {
+	Peers   []Peer
+	Error   string
+	Success string
+}
+
+type qrData struct {
+	Name    string
+	Config  string
+	QRImage string // base64-encoded PNG
+}
+
+func (a *App) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !a.auth.Check(r) {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (a *App) handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	if a.auth.Check(r) {
+		http.Redirect(w, r, "/", http.StatusFound)
+		return
+	}
+	a.render(w, "login.html", loginData{})
+}
+
+func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
+	token, ok := a.auth.Login(r.FormValue("password"))
+	if !ok {
+		a.render(w, "login.html", loginData{Error: "Invalid password"})
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "session",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Now().Add(24 * time.Hour),
+	})
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
+	a.auth.Logout(r)
+	http.SetCookie(w, &http.Cookie{
+		Name:   "session",
+		Value:  "",
+		Path:   "/",
+		MaxAge: -1,
+	})
+	http.Redirect(w, r, "/login", http.StatusFound)
+}
+
+func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
+	cfg, err := a.k8s.GetConfig(r.Context())
+	if err != nil {
+		a.render(w, "index.html", indexData{Error: "Load config: " + err.Error()})
+		return
+	}
+	a.render(w, "index.html", indexData{Peers: cfg.Peers})
+}
+
+func (a *App) handleAddPeer(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	cfg, err := a.k8s.GetConfig(ctx)
+	if err != nil {
+		a.render(w, "index.html", indexData{Error: "Load config: " + err.Error()})
+		return
+	}
+	if cfg.FindPeer(name) != nil {
+		a.render(w, "index.html", indexData{Peers: cfg.Peers, Error: "Peer " + name + " already exists"})
+		return
+	}
+
+	privKey, pubKey, err := GenerateKeyPair()
+	if err != nil {
+		a.render(w, "index.html", indexData{Peers: cfg.Peers, Error: "Keygen: " + err.Error()})
+		return
+	}
+	psk, err := GeneratePSK()
+	if err != nil {
+		a.render(w, "index.html", indexData{Peers: cfg.Peers, Error: "PSK gen: " + err.Error()})
+		return
+	}
+
+	ip := cfg.NextIP()
+	peer := Peer{
+		Name:       name,
+		PublicKey:  pubKey,
+		PrivateKey: privKey,
+		PSK:        psk,
+		IP:         ip,
+		AllowedIPs: ip + "/32",
+	}
+	cfg.Peers = append(cfg.Peers, peer)
+
+	if err := a.k8s.SaveConfig(ctx, cfg); err != nil {
+		cfg.Peers = cfg.Peers[:len(cfg.Peers)-1] // undo append for display
+		a.render(w, "index.html", indexData{Peers: cfg.Peers, Error: "Save config: " + err.Error()})
+		return
+	}
+
+	// Hot-add into the running WireGuard instance; secret update is the source of truth.
+	if err := a.k8s.WGAddPeer(ctx, pubKey, psk, peer.AllowedIPs); err != nil {
+		log.Printf("warn: hot-add peer %q: %v", name, err)
+	}
+
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (a *App) handleDeletePeer(w http.ResponseWriter, r *http.Request) {
+	name := r.FormValue("name")
+
+	ctx := r.Context()
+	cfg, err := a.k8s.GetConfig(ctx)
+	if err != nil {
+		http.Error(w, "load config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	peer := cfg.FindPeer(name)
+	if peer == nil {
+		http.Error(w, "peer not found", http.StatusNotFound)
+		return
+	}
+	pubKey := peer.PublicKey
+
+	cfg.RemovePeer(name)
+
+	if err := a.k8s.SaveConfig(ctx, cfg); err != nil {
+		http.Error(w, "save config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := a.k8s.WGRemovePeer(ctx, pubKey); err != nil {
+		log.Printf("warn: hot-remove peer %q: %v", name, err)
+	}
+
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func (a *App) handleQR(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+
+	ctx := r.Context()
+	cfg, err := a.k8s.GetConfig(ctx)
+	if err != nil {
+		http.Error(w, "load config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	peer := cfg.FindPeer(name)
+	if peer == nil {
+		http.Error(w, "peer not found", http.StatusNotFound)
+		return
+	}
+	if peer.PrivateKey == "" {
+		http.Error(w, "private key not available for this peer", http.StatusInternalServerError)
+		return
+	}
+
+	serverPubKey, err := cfg.ServerPublicKey()
+	if err != nil {
+		http.Error(w, "server public key: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, listenPort(cfg))
+
+	png, err := qrcode.Encode(confText, qrcode.Medium, 256)
+	if err != nil {
+		http.Error(w, "qr encode: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	a.render(w, "qr.html", qrData{
+		Name:    name,
+		Config:  confText,
+		QRImage: base64.StdEncoding.EncodeToString(png),
+	})
+}
+
+func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+
+	ctx := r.Context()
+	cfg, err := a.k8s.GetConfig(ctx)
+	if err != nil {
+		http.Error(w, "load config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	peer := cfg.FindPeer(name)
+	if peer == nil {
+		http.Error(w, "peer not found", http.StatusNotFound)
+		return
+	}
+	if peer.PrivateKey == "" {
+		http.Error(w, "private key not available", http.StatusInternalServerError)
+		return
+	}
+
+	serverPubKey, err := cfg.ServerPublicKey()
+	if err != nil {
+		http.Error(w, "server public key: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, listenPort(cfg))
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.conf"`, name))
+	fmt.Fprint(w, confText)
+}
+
+func (a *App) render(w http.ResponseWriter, name string, data any) {
+	if err := a.tmpls.ExecuteTemplate(w, name, data); err != nil {
+		log.Printf("template %s: %v", name, err)
+	}
+}
+
+func listenPort(cfg *WGConfig) string {
+	if cfg.ListenPort != "" {
+		return cfg.ListenPort
+	}
+	return "51820"
+}
+
+type editData struct {
+	Peer  Peer
+	Error string
+}
+
+func (a *App) handleEditPage(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	cfg, err := a.k8s.GetConfig(r.Context())
+	if err != nil {
+		http.Error(w, "load config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	peer := cfg.FindPeer(name)
+	if peer == nil {
+		http.Error(w, "peer not found", http.StatusNotFound)
+		return
+	}
+	a.render(w, "edit.html", editData{Peer: *peer})
+}
+
+func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
+	name := r.FormValue("name")
+	newIP := strings.TrimSpace(r.FormValue("ip"))
+
+	if net.ParseIP(newIP) == nil || !strings.HasPrefix(newIP, "10.66.66.") {
+		http.Error(w, "IP must be in the 10.66.66.0/24 subnet", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	cfg, err := a.k8s.GetConfig(ctx)
+	if err != nil {
+		http.Error(w, "load config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	peer := cfg.FindPeer(name)
+	if peer == nil {
+		http.Error(w, "peer not found", http.StatusNotFound)
+		return
+	}
+
+	for _, p := range cfg.Peers {
+		if p.Name != name && p.IP == newIP {
+			a.render(w, "edit.html", editData{Peer: *peer, Error: newIP + " is already assigned to " + p.Name})
+			return
+		}
+	}
+
+	pubKey := peer.PublicKey
+	peer.IP = newIP
+	peer.AllowedIPs = newIP + "/32"
+
+	if err := a.k8s.SaveConfig(ctx, cfg); err != nil {
+		a.render(w, "edit.html", editData{Peer: *peer, Error: "Save failed: " + err.Error()})
+		return
+	}
+
+	if err := a.k8s.WGSetAllowedIPs(ctx, pubKey, peer.AllowedIPs); err != nil {
+		log.Printf("warn: hot-update allowed-ips for %q: %v", name, err)
+	}
+
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+func buildPeerConfig(p Peer, serverPubKey, endpoint, port string) string {
+	ep := endpoint
+	if ep == "" {
+		ep = "YOUR_SERVER_IP"
+	}
+	return fmt.Sprintf(`[Interface]
+PrivateKey = %s
+Address = %s/24
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = %s
+PresharedKey = %s
+Endpoint = %s:%s
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+`, p.PrivateKey, p.IP, serverPubKey, p.PSK, ep, port)
+}

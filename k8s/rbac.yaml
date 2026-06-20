@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wg-manager
+  namespace: vpn
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wg-manager
+  namespace: vpn
+rules:
+  # Read and update the WireGuard keys secret only — scoped to the exact resource name.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["wireguard-keys"]
+    verbs: ["get", "update"]
+  # List + get pods to find the wireguard pod for hot-reload exec.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  # Execute wg set commands inside the wireguard pod.
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wg-manager
+  namespace: vpn
+subjects:
+  - kind: ServiceAccount
+    name: wg-manager
+    namespace: vpn
+roleRef:
+  kind: Role
+  name: wg-manager
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WireGuard Manager</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f3f4f6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.1);
+      padding: 2rem;
+      width: 320px;
+    }
+    h1 { margin: 0 0 1.5rem; font-size: 1.2rem; color: #111; }
+    .error {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 6px;
+      color: #b91c1c;
+      font-size: .875rem;
+      margin-bottom: 1rem;
+      padding: .5rem .75rem;
+    }
+    input[type=password] {
+      width: 100%;
+      padding: .5rem .75rem;
+      font-size: 1rem;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      margin-bottom: .75rem;
+      outline: none;
+    }
+    input[type=password]:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,.2); }
+    button {
+      width: 100%;
+      padding: .6rem;
+      background: #4f46e5;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    button:hover { background: #4338ca; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>WireGuard Manager</h1>
+    {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+    <form method="POST" action="/login">
+      <input type="password" name="password" placeholder="Password" autofocus required>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</body>
+</html>
