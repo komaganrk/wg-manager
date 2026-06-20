@@ -85,8 +85,9 @@
         <input type="hidden" name="name" value="{{.Peer.Name}}">
 
         <div class="field">
-          <label>Name</label>
-          <input type="text" value="{{.Peer.Name}}" readonly>
+          <label for="newname">Name</label>
+          <input type="text" id="newname" name="newname" value="{{.Peer.Name}}"
+                 pattern="[A-Za-z0-9._-]+" title="Letters, digits, dots, hyphens, underscores only" required>
         </div>
 
         <div class="field">

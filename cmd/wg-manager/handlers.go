@@ -280,13 +280,8 @@ func (a *App) handleEditPage(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("name")
+	newName := strings.TrimSpace(r.FormValue("newname"))
 	newIP := strings.TrimSpace(r.FormValue("ip"))
-
-	_, ipNet, _ := net.ParseCIDR(a.subnet)
-	if net.ParseIP(newIP) == nil || ipNet == nil || !ipNet.Contains(net.ParseIP(newIP)) {
-		http.Error(w, "IP must be within "+a.subnet, http.StatusBadRequest)
-		return
-	}
 
 	ctx := r.Context()
 	cfg, err := a.k8s.GetConfig(ctx)
@@ -301,6 +296,24 @@ func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if newName == "" {
+		a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet, Error: "Name cannot be empty"})
+		return
+	}
+	if newName != name {
+		for _, p := range cfg.Peers {
+			if p.Name == newName {
+				a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet, Error: "Name " + newName + " is already in use"})
+				return
+			}
+		}
+	}
+
+	_, ipNet, _ := net.ParseCIDR(a.subnet)
+	if net.ParseIP(newIP) == nil || ipNet == nil || !ipNet.Contains(net.ParseIP(newIP)) {
+		a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet, Error: "IP must be within " + a.subnet})
+		return
+	}
 	for _, p := range cfg.Peers {
 		if p.Name != name && p.IP == newIP {
 			a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet, Error: newIP + " is already assigned to " + p.Name})
@@ -309,6 +322,7 @@ func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pubKey := peer.PublicKey
+	peer.Name = newName
 	peer.IP = newIP
 	peer.AllowedIPs = newIP + "/32"
 
