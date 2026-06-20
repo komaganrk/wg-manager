@@ -90,17 +90,35 @@ func (c *WGConfig) Marshal() string {
 	return sb.String()
 }
 
-// NextIP returns the next available peer IP in the 10.66.66.0/24 subnet.
-func (c *WGConfig) NextIP() string {
+// NextIP returns the next available peer IP within the given CIDR subnet (e.g. "10.0.0.0/24").
+// The server is assumed to hold .1; peers start at .2.
+func (c *WGConfig) NextIP(subnet string) string {
+	prefix := subnetPrefix(subnet)
 	max := 1
 	for _, p := range c.Peers {
-		var last int
-		fmt.Sscanf(strings.Split(p.IP, ".")[3], "%d", &last)
-		if last > max {
-			max = last
+		parts := strings.Split(p.IP, ".")
+		if len(parts) == 4 && strings.Join(parts[:3], ".") == prefix {
+			var last int
+			fmt.Sscanf(parts[3], "%d", &last)
+			if last > max {
+				max = last
+			}
 		}
 	}
-	return fmt.Sprintf("10.66.66.%d", max+1)
+	return fmt.Sprintf("%s.%d", prefix, max+1)
+}
+
+// subnetPrefix returns the first three octets of a CIDR, e.g. "10.0.0" from "10.0.0.0/24".
+func subnetPrefix(subnet string) string {
+	ip, _, err := net.ParseCIDR(subnet)
+	if err != nil {
+		return "10.0.0"
+	}
+	parts := strings.Split(ip.String(), ".")
+	if len(parts) < 3 {
+		return "10.0.0"
+	}
+	return strings.Join(parts[:3], ".")
 }
 
 // RemovePeer removes a peer by name, returns false if not found.

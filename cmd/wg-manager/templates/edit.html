@@ -91,11 +91,8 @@
 
         <div class="field">
           <label for="ip">IP address</label>
-          <input type="text" id="ip" name="ip" value="{{.Peer.IP}}"
-                 pattern="10\.66\.66\.\d{1,3}"
-                 title="Must be in the 10.66.66.0/24 subnet"
-                 required>
-          <p class="hint">Must be in 10.66.66.0/24 and not already assigned to another peer.</p>
+          <input type="text" id="ip" name="ip" value="{{.Peer.IP}}" required>
+          <p class="hint">Must be within {{.Subnet}} and not already assigned to another peer.</p>
         </div>
 
         <div class="actions">

@@ -83,6 +83,7 @@ Open `http://localhost:8080`.
 |---|---|---|
 | `WG_PASSWORD` | required | Login password |
 | `WG_ENDPOINT` | — | Server public IP/hostname used in generated peer configs and QR codes |
+| `WG_SUBNET` | `10.0.0.0/24` | Peer subnet; server is assumed to hold `.1`, peers assigned from `.2` |
 | `WG_NAMESPACE` | `vpn` | Namespace containing the WireGuard pod and secret |
 | `WG_SECRET` | `wireguard-keys` | Name of the Kubernetes Secret |
 

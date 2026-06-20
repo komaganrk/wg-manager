@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+
+	"github.com/joho/godotenv"
 )
 
 //go:embed templates
@@ -15,10 +17,14 @@ type App struct {
 	auth     *Auth
 	k8s      *K8sClient
 	endpoint string
+	subnet   string
 	tmpls    *template.Template
 }
 
 func main() {
+	// Load .env if present; no-op in Kubernetes where env vars come from the pod spec.
+	_ = godotenv.Load()
+
 	password := os.Getenv("WG_PASSWORD")
 	if password == "" {
 		log.Fatal("WG_PASSWORD env var is required")
@@ -38,6 +44,7 @@ func main() {
 		auth:     NewAuth(password),
 		k8s:      k8s,
 		endpoint: os.Getenv("WG_ENDPOINT"),
+		subnet:   getenv("WG_SUBNET", "10.0.0.0/24"),
 		tmpls:    tmpls,
 	}
 

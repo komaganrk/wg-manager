@@ -112,7 +112,7 @@ func (a *App) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := cfg.NextIP()
+	ip := cfg.NextIP(a.subnet)
 	peer := Peer{
 		Name:       name,
 		PublicKey:  pubKey,
@@ -256,8 +256,9 @@ func listenPort(cfg *WGConfig) string {
 }
 
 type editData struct {
-	Peer  Peer
-	Error string
+	Peer   Peer
+	Subnet string
+	Error  string
 }
 
 func (a *App) handleEditPage(w http.ResponseWriter, r *http.Request) {
@@ -272,15 +273,16 @@ func (a *App) handleEditPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "peer not found", http.StatusNotFound)
 		return
 	}
-	a.render(w, "edit.html", editData{Peer: *peer})
+	a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet})
 }
 
 func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("name")
 	newIP := strings.TrimSpace(r.FormValue("ip"))
 
-	if net.ParseIP(newIP) == nil || !strings.HasPrefix(newIP, "10.66.66.") {
-		http.Error(w, "IP must be in the 10.66.66.0/24 subnet", http.StatusBadRequest)
+	_, ipNet, _ := net.ParseCIDR(a.subnet)
+	if net.ParseIP(newIP) == nil || ipNet == nil || !ipNet.Contains(net.ParseIP(newIP)) {
+		http.Error(w, "IP must be within "+a.subnet, http.StatusBadRequest)
 		return
 	}
 
@@ -299,7 +301,7 @@ func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 
 	for _, p := range cfg.Peers {
 		if p.Name != name && p.IP == newIP {
-			a.render(w, "edit.html", editData{Peer: *peer, Error: newIP + " is already assigned to " + p.Name})
+			a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet, Error: newIP + " is already assigned to " + p.Name})
 			return
 		}
 	}
@@ -309,7 +311,7 @@ func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	peer.AllowedIPs = newIP + "/32"
 
 	if err := a.k8s.SaveConfig(ctx, cfg); err != nil {
-		a.render(w, "edit.html", editData{Peer: *peer, Error: "Save failed: " + err.Error()})
+		a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet, Error: "Save failed: " + err.Error()})
 		return
 	}
 
