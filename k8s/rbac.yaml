@@ -20,6 +20,9 @@ rules:
     resources: ["pods"]
     verbs: ["get", "list"]
   # Execute wg set commands inside the wireguard pod.
+  # K8s RBAC does not support label selectors on pods/exec — namespace scoping
+  # (Role, not ClusterRole) is the hard boundary here. The app further narrows
+  # exec targets to pods matching label app=wireguard at runtime.
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
