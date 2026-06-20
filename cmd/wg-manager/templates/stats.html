@@ -157,7 +157,7 @@
 
       peers.set(peer.pubkey, {
         dot, name: cells.name, ep: cells.ep, hs: cells.hs,
-        rx: cells.rx, tx: cells.tx,
+        rx: cells.rx, tx: cells.tx, rate: cells.rate,
         canvas, ctx: canvas.getContext('2d'),
         prevRx: null, prevTx: null,
         rxR: [], txR: [],
@@ -195,15 +195,12 @@
         d.rx.textContent   = fmtBytes(peer.rx_bytes);
         d.tx.textContent   = fmtBytes(peer.tx_bytes);
         d.rate.replaceChildren(d.canvas);
-
-        // inline rate label under canvas
-        const rateLabel = fmtRate(rxRate) + ' ↓  ' + fmtRate(txRate) + ' ↑';
         if (!d.rateEl) {
           d.rateEl = document.createElement('div');
           d.rateEl.style.cssText = 'font-size:.7rem;color:#9ca3af;margin-top:2px';
-          d.rate.appendChild(d.rateEl);
         }
-        d.rateEl.textContent = rateLabel;
+        d.rateEl.textContent = fmtRate(rxRate) + ' ↓  ' + fmtRate(txRate) + ' ↑';
+        d.rate.appendChild(d.rateEl); // re-append after replaceChildren
         drawSparkline(d);
       });
     }
