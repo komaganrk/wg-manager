@@ -196,7 +196,7 @@ func (a *App) handleQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, listenPort(cfg))
+	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, a.endpointPort)
 
 	png, err := qrcode.Encode(confText, qrcode.Medium, 256)
 	if err != nil {
@@ -237,7 +237,7 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, listenPort(cfg))
+	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, a.endpointPort)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.conf"`, name))
@@ -438,13 +438,12 @@ func buildPeerConfig(p Peer, serverPubKey, endpoint, port string) string {
 	return fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s/24
-DNS = 1.1.1.1
 
 [Peer]
 PublicKey = %s
 PresharedKey = %s
 Endpoint = %s:%s
-AllowedIPs = 0.0.0.0/0, ::/0
+AllowedIPs = 10.66.66.0/24
 PersistentKeepalive = 25
 `, p.PrivateKey, p.IP, serverPubKey, p.PSK, ep, port)
 }
