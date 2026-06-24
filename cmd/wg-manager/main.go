@@ -14,11 +14,12 @@ import (
 var templateFS embed.FS
 
 type App struct {
-	auth     *Auth
-	k8s      *K8sClient
-	endpoint string
-	subnet   string
-	tmpls    *template.Template
+	auth         *Auth
+	k8s          *K8sClient
+	endpoint     string
+	endpointPort string
+	subnet       string
+	tmpls        *template.Template
 }
 
 func main() {
@@ -41,11 +42,12 @@ func main() {
 	tmpls := template.Must(template.ParseFS(templateFS, "templates/*.html"))
 
 	app := &App{
-		auth:     NewAuth(password),
-		k8s:      k8s,
-		endpoint: os.Getenv("WG_ENDPOINT"),
-		subnet:   getenv("WG_SUBNET", "10.0.0.0/24"),
-		tmpls:    tmpls,
+		auth:         NewAuth(password),
+		k8s:          k8s,
+		endpoint:     os.Getenv("WG_ENDPOINT"),
+		endpointPort: getenv("WG_ENDPOINT_PORT", "443"),
+		subnet:       getenv("WG_SUBNET", "10.0.0.0/24"),
+		tmpls:        tmpls,
 	}
 
 	mux := http.NewServeMux()
