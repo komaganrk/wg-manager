@@ -82,6 +82,25 @@
       outline: none;
     }
     .add-row input:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,.2); }
+    .add-row select {
+      padding: .45rem .6rem;
+      font-size: .9rem;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      outline: none;
+      background: #fff;
+    }
+    .add-row select:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,.2); }
+    .badge {
+      display: inline-block;
+      padding: .15rem .5rem;
+      border-radius: 99px;
+      font-size: .72rem;
+      font-weight: 600;
+      background: #e0e7ff;
+      color: #3730a3;
+    }
+    .badge-friends { background: #d1fae5; color: #065f46; }
     .logout-btn {
       background: #e5e7eb;
       color: #374151;
@@ -116,6 +135,7 @@
           <tr>
             <th>Name</th>
             <th>IP address</th>
+            <th>Subnet</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -124,6 +144,7 @@
           <tr>
             <td>{{.Name}}</td>
             <td class="mono">{{.IP}}</td>
+            <td>{{if .SubnetName}}<span class="badge{{if eq .SubnetName "Friends"}} badge-friends{{end}}">{{.SubnetName}}</span>{{end}}</td>
             <td>
               <div class="actions">
                 <a href="/peer/qr?name={{.Name}}" class="btn btn-primary">QR</a>
@@ -150,6 +171,13 @@
       <form method="POST" action="/peer/add" class="add-row">
         <input type="text" name="name" placeholder="Peer name (e.g. laptop, phone)" required
                pattern="[A-Za-z0-9._-]+" title="Letters, digits, dots, hyphens, underscores only">
+        {{if gt (len .Subnets) 1}}
+        <select name="subnet">
+          {{range .Subnets}}<option value="{{.Name}}">{{.Name}}</option>{{end}}
+        </select>
+        {{else}}
+        <input type="hidden" name="subnet" value="{{(index .Subnets 0).Name}}">
+        {{end}}
         <button type="submit" class="btn btn-primary">Add</button>
       </form>
     </div>

@@ -18,8 +18,15 @@ type loginData struct {
 	Error string
 }
 
+// PeerRow is a Peer decorated with its resolved subnet name for display.
+type PeerRow struct {
+	Peer
+	SubnetName string
+}
+
 type indexData struct {
-	Peers   []Peer
+	Peers   []PeerRow
+	Subnets []SubnetPool
 	Error   string
 	Success string
 }
@@ -79,10 +86,10 @@ func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleIndex(w http.ResponseWriter, r *http.Request) {
 	cfg, err := a.k8s.GetConfig(r.Context())
 	if err != nil {
-		a.render(w, "index.html", indexData{Error: "Load config: " + err.Error()})
+		a.render(w, "index.html", indexData{Subnets: a.subnets, Error: "Load config: " + err.Error()})
 		return
 	}
-	a.render(w, "index.html", indexData{Peers: cfg.Peers})
+	a.render(w, "index.html", indexData{Peers: a.toPeerRows(cfg.Peers), Subnets: a.subnets})
 }
 
 func (a *App) handleAddPeer(w http.ResponseWriter, r *http.Request) {
@@ -92,29 +99,36 @@ func (a *App) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve target subnet; default to first if not specified or unknown.
+	subnetName := r.FormValue("subnet")
+	pool := a.subnetByName(subnetName)
+	if pool == nil {
+		pool = &a.subnets[0]
+	}
+
 	ctx := r.Context()
 	cfg, err := a.k8s.GetConfig(ctx)
 	if err != nil {
-		a.render(w, "index.html", indexData{Error: "Load config: " + err.Error()})
+		a.render(w, "index.html", indexData{Subnets: a.subnets, Error: "Load config: " + err.Error()})
 		return
 	}
 	if cfg.FindPeer(name) != nil {
-		a.render(w, "index.html", indexData{Peers: cfg.Peers, Error: "Peer " + name + " already exists"})
+		a.render(w, "index.html", indexData{Peers: a.toPeerRows(cfg.Peers), Subnets: a.subnets, Error: "Peer " + name + " already exists"})
 		return
 	}
 
 	privKey, pubKey, err := GenerateKeyPair()
 	if err != nil {
-		a.render(w, "index.html", indexData{Peers: cfg.Peers, Error: "Keygen: " + err.Error()})
+		a.render(w, "index.html", indexData{Peers: a.toPeerRows(cfg.Peers), Subnets: a.subnets, Error: "Keygen: " + err.Error()})
 		return
 	}
 	psk, err := GeneratePSK()
 	if err != nil {
-		a.render(w, "index.html", indexData{Peers: cfg.Peers, Error: "PSK gen: " + err.Error()})
+		a.render(w, "index.html", indexData{Peers: a.toPeerRows(cfg.Peers), Subnets: a.subnets, Error: "PSK gen: " + err.Error()})
 		return
 	}
 
-	ip := cfg.NextIP(a.subnet)
+	ip := cfg.NextIP(pool.CIDR)
 	peer := Peer{
 		Name:       name,
 		PublicKey:  pubKey,
@@ -126,8 +140,8 @@ func (a *App) handleAddPeer(w http.ResponseWriter, r *http.Request) {
 	cfg.Peers = append(cfg.Peers, peer)
 
 	if err := a.k8s.SaveConfig(ctx, cfg); err != nil {
-		cfg.Peers = cfg.Peers[:len(cfg.Peers)-1] // undo append for display
-		a.render(w, "index.html", indexData{Peers: cfg.Peers, Error: "Save config: " + err.Error()})
+		cfg.Peers = cfg.Peers[:len(cfg.Peers)-1]
+		a.render(w, "index.html", indexData{Peers: a.toPeerRows(cfg.Peers), Subnets: a.subnets, Error: "Save config: " + err.Error()})
 		return
 	}
 
@@ -196,7 +210,7 @@ func (a *App) handleQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, a.endpointPort)
+	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, a.endpointPort, a.peerSubnetCIDR(peer.IP))
 
 	png, err := qrcode.Encode(confText, qrcode.Medium, 256)
 	if err != nil {
@@ -237,7 +251,7 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, a.endpointPort)
+	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, a.endpointPort, a.peerSubnetCIDR(peer.IP))
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.conf"`, name))
@@ -258,9 +272,9 @@ func listenPort(cfg *WGConfig) string {
 }
 
 type editData struct {
-	Peer   Peer
-	Subnet string
-	Error  string
+	Peer    Peer
+	Subnets []SubnetPool
+	Error   string
 }
 
 func (a *App) handleEditPage(w http.ResponseWriter, r *http.Request) {
@@ -275,7 +289,7 @@ func (a *App) handleEditPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "peer not found", http.StatusNotFound)
 		return
 	}
-	a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet})
+	a.render(w, "edit.html", editData{Peer: *peer, Subnets: a.subnets})
 }
 
 func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
@@ -297,26 +311,27 @@ func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if newName == "" {
-		a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet, Error: "Name cannot be empty"})
+		a.render(w, "edit.html", editData{Peer: *peer, Subnets: a.subnets, Error: "Name cannot be empty"})
 		return
 	}
 	if newName != name {
 		for _, p := range cfg.Peers {
 			if p.Name == newName {
-				a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet, Error: "Name " + newName + " is already in use"})
+				a.render(w, "edit.html", editData{Peer: *peer, Subnets: a.subnets, Error: "Name " + newName + " is already in use"})
 				return
 			}
 		}
 	}
 
-	_, ipNet, _ := net.ParseCIDR(a.subnet)
-	if net.ParseIP(newIP) == nil || ipNet == nil || !ipNet.Contains(net.ParseIP(newIP)) {
-		a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet, Error: "IP must be within " + a.subnet})
+	// Accept IP from any configured subnet.
+	if net.ParseIP(newIP) == nil || !a.ipInAnySubnet(newIP) {
+		hint := a.subnetHint()
+		a.render(w, "edit.html", editData{Peer: *peer, Subnets: a.subnets, Error: "IP must be within " + hint})
 		return
 	}
 	for _, p := range cfg.Peers {
 		if p.Name != name && p.IP == newIP {
-			a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet, Error: newIP + " is already assigned to " + p.Name})
+			a.render(w, "edit.html", editData{Peer: *peer, Subnets: a.subnets, Error: newIP + " is already assigned to " + p.Name})
 			return
 		}
 	}
@@ -327,7 +342,7 @@ func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	peer.AllowedIPs = newIP + "/32"
 
 	if err := a.k8s.SaveConfig(ctx, cfg); err != nil {
-		a.render(w, "edit.html", editData{Peer: *peer, Subnet: a.subnet, Error: "Save failed: " + err.Error()})
+		a.render(w, "edit.html", editData{Peer: *peer, Subnets: a.subnets, Error: "Save failed: " + err.Error()})
 		return
 	}
 
@@ -336,6 +351,34 @@ func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+func (a *App) toPeerRows(peers []Peer) []PeerRow {
+	rows := make([]PeerRow, len(peers))
+	for i, p := range peers {
+		rows[i] = PeerRow{Peer: p, SubnetName: a.peerSubnetName(p.IP)}
+	}
+	return rows
+}
+
+func (a *App) ipInAnySubnet(ip string) bool {
+	parsed := net.ParseIP(ip)
+	for _, pool := range a.subnets {
+		if pool.net.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) subnetHint() string {
+	parts := make([]string, len(a.subnets))
+	for i, p := range a.subnets {
+		parts[i] = p.Name + " (" + p.CIDR + ")"
+	}
+	return strings.Join(parts, " or ")
 }
 
 // ── live stats ────────────────────────────────────────────────────────────────
@@ -430,20 +473,24 @@ func parseDump(dump string, names map[string]string) statsPayload {
 	return statsPayload{Ts: time.Now().Unix(), Peers: peers}
 }
 
-func buildPeerConfig(p Peer, serverPubKey, endpoint, port string) string {
+// buildPeerConfig generates the client-side WireGuard config for a peer.
+// subnetCIDR determines the Address prefix length and AllowedIPs.
+func buildPeerConfig(p Peer, serverPubKey, endpoint, port, subnetCIDR string) string {
 	ep := endpoint
 	if ep == "" {
 		ep = "YOUR_SERVER_IP"
 	}
+	_, ipNet, _ := net.ParseCIDR(subnetCIDR)
+	ones, _ := ipNet.Mask.Size()
 	return fmt.Sprintf(`[Interface]
 PrivateKey = %s
-Address = %s/24
+Address = %s/%d
 
 [Peer]
 PublicKey = %s
 PresharedKey = %s
 Endpoint = %s:%s
-AllowedIPs = 10.66.66.0/24
+AllowedIPs = %s
 PersistentKeepalive = 25
-`, p.PrivateKey, p.IP, serverPubKey, p.PSK, ep, port)
+`, p.PrivateKey, p.IP, ones, serverPubKey, p.PSK, ep, port, subnetCIDR)
 }

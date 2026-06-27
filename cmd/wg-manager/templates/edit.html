@@ -93,7 +93,7 @@
         <div class="field">
           <label for="ip">IP address</label>
           <input type="text" id="ip" name="ip" value="{{.Peer.IP}}" required>
-          <p class="hint">Must be within {{.Subnet}} and not already assigned to another peer.</p>
+          <p class="hint">Must be within {{range $i, $s := .Subnets}}{{if $i}} or {{end}}{{$s.Name}} ({{$s.CIDR}}){{end}} and not already assigned to another peer.</p>
         </div>
 
         <div class="actions">
