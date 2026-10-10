@@ -17,9 +17,10 @@ var templateFS embed.FS
 
 // SubnetPool is a named WireGuard peer address pool.
 type SubnetPool struct {
-	Name string
-	CIDR string
-	net  *net.IPNet
+	Name        string
+	CIDR        string
+	ExtraRoutes []string // additional CIDRs routed into the tunnel for peers in this pool (e.g. VCN access)
+	net         *net.IPNet
 }
 
 type App struct {
@@ -59,6 +60,11 @@ func main() {
 	if len(subnets) == 0 {
 		log.Fatal("no valid subnets configured")
 	}
+
+	// WG_SUBNET_ROUTES: comma-separated "Name:cidr" pairs granting a pool
+	// extra routes beyond its own subnet, e.g. "Personal:10.0.0.0/16" to let
+	// the Personal pool reach the OCI VCN while Friends stays confined.
+	applyExtraRoutes(subnets, os.Getenv("WG_SUBNET_ROUTES"))
 
 	tmpls := template.Must(template.ParseFS(templateFS, "templates/*.html"))
 
@@ -109,6 +115,38 @@ func parseSubnets(raw string) []SubnetPool {
 	return pools
 }
 
+// applyExtraRoutes parses WG_SUBNET_ROUTES and attaches ExtraRoutes to the
+// matching pools by name. Unknown pool names are logged and skipped.
+func applyExtraRoutes(subnets []SubnetPool, raw string) {
+	if raw == "" {
+		return
+	}
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		idx := strings.Index(part, ":")
+		if idx < 0 {
+			continue
+		}
+		name := strings.TrimSpace(part[:idx])
+		cidr := strings.TrimSpace(part[idx+1:])
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			log.Printf("warn: invalid extra route %q for pool %q: %v", cidr, name, err)
+			continue
+		}
+		found := false
+		for i := range subnets {
+			if subnets[i].Name == name {
+				subnets[i].ExtraRoutes = append(subnets[i].ExtraRoutes, cidr)
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Printf("warn: WG_SUBNET_ROUTES names unknown pool %q", name)
+		}
+	}
+}
+
 // peerSubnetCIDR returns the CIDR of the subnet that contains the given IP,
 // falling back to the first subnet if none match.
 func (a *App) peerSubnetCIDR(ip string) string {
@@ -116,6 +154,18 @@ func (a *App) peerSubnetCIDR(ip string) string {
 	for _, pool := range a.subnets {
 		if pool.net.Contains(parsed) {
 			return pool.CIDR
+		}
+	}
+	return a.subnets[0].CIDR
+}
+
+// peerAllowedIPs returns the full AllowedIPs string for a peer's client
+// config: its own pool CIDR plus any ExtraRoutes granted to that pool.
+func (a *App) peerAllowedIPs(ip string) string {
+	parsed := net.ParseIP(ip)
+	for _, pool := range a.subnets {
+		if pool.net.Contains(parsed) {
+			return strings.Join(append([]string{pool.CIDR}, pool.ExtraRoutes...), ",")
 		}
 	}
 	return a.subnets[0].CIDR

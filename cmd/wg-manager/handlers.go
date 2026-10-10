@@ -210,7 +210,7 @@ func (a *App) handleQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, a.endpointPort, a.peerSubnetCIDR(peer.IP))
+	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, a.endpointPort, a.peerSubnetCIDR(peer.IP), a.peerAllowedIPs(peer.IP))
 
 	png, err := qrcode.Encode(confText, qrcode.Medium, 256)
 	if err != nil {
@@ -251,7 +251,7 @@ func (a *App) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, a.endpointPort, a.peerSubnetCIDR(peer.IP))
+	confText := buildPeerConfig(*peer, serverPubKey, a.endpoint, a.endpointPort, a.peerSubnetCIDR(peer.IP), a.peerAllowedIPs(peer.IP))
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.conf"`, name))
@@ -474,8 +474,10 @@ func parseDump(dump string, names map[string]string) statsPayload {
 }
 
 // buildPeerConfig generates the client-side WireGuard config for a peer.
-// subnetCIDR determines the Address prefix length and AllowedIPs.
-func buildPeerConfig(p Peer, serverPubKey, endpoint, port, subnetCIDR string) string {
+// subnetCIDR gives the Address prefix length (the peer's own pool);
+// allowedIPs is the full routed list for this peer (pool CIDR + any
+// extra routes granted to its pool, e.g. VCN access for Personal).
+func buildPeerConfig(p Peer, serverPubKey, endpoint, port, subnetCIDR, allowedIPs string) string {
 	ep := endpoint
 	if ep == "" {
 		ep = "YOUR_SERVER_IP"
@@ -492,5 +494,5 @@ PresharedKey = %s
 Endpoint = %s:%s
 AllowedIPs = %s
 PersistentKeepalive = 25
-`, p.PrivateKey, p.IP, ones, serverPubKey, p.PSK, ep, port, subnetCIDR)
+`, p.PrivateKey, p.IP, ones, serverPubKey, p.PSK, ep, port, allowedIPs)
 }
