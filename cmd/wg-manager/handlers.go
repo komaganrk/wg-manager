@@ -272,9 +272,11 @@ func listenPort(cfg *WGConfig) string {
 }
 
 type editData struct {
-	Peer    Peer
-	Subnets []SubnetPool
-	Error   string
+	Peer         Peer
+	Subnets      []SubnetPool
+	CurrentGroup string
+	Notice       string
+	Error        string
 }
 
 func (a *App) handleEditPage(w http.ResponseWriter, r *http.Request) {
@@ -289,7 +291,53 @@ func (a *App) handleEditPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "peer not found", http.StatusNotFound)
 		return
 	}
-	a.render(w, "edit.html", editData{Peer: *peer, Subnets: a.subnets})
+	a.render(w, "edit.html", editData{Peer: *peer, Subnets: a.subnets, CurrentGroup: a.peerSubnetName(peer.IP)})
+}
+
+// handleMovePeer reassigns a peer to a different subnet pool, picking the
+// next free IP in that pool. This is how a device moves between groups
+// (e.g. Friends -> Personal) without hand-typing an IP.
+func (a *App) handleMovePeer(w http.ResponseWriter, r *http.Request) {
+	name := r.FormValue("name")
+	group := r.FormValue("group")
+
+	ctx := r.Context()
+	cfg, err := a.k8s.GetConfig(ctx)
+	if err != nil {
+		http.Error(w, "load config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	peer := cfg.FindPeer(name)
+	if peer == nil {
+		http.Error(w, "peer not found", http.StatusNotFound)
+		return
+	}
+
+	pool := a.subnetByName(group)
+	if pool == nil {
+		a.render(w, "edit.html", editData{Peer: *peer, Subnets: a.subnets, CurrentGroup: a.peerSubnetName(peer.IP), Error: "Unknown group " + group})
+		return
+	}
+	if pool.net.Contains(net.ParseIP(peer.IP)) {
+		a.render(w, "edit.html", editData{Peer: *peer, Subnets: a.subnets, CurrentGroup: a.peerSubnetName(peer.IP), Error: name + " is already in " + group})
+		return
+	}
+
+	newIP := cfg.NextIP(pool.CIDR)
+	pubKey := peer.PublicKey
+	peer.IP = newIP
+	peer.AllowedIPs = newIP + "/32"
+
+	if err := a.k8s.SaveConfig(ctx, cfg); err != nil {
+		a.render(w, "edit.html", editData{Peer: *peer, Subnets: a.subnets, CurrentGroup: a.peerSubnetName(peer.IP), Error: "Save failed: " + err.Error()})
+		return
+	}
+	if err := a.k8s.WGSetAllowedIPs(ctx, pubKey, peer.AllowedIPs); err != nil {
+		log.Printf("warn: hot-update allowed-ips for %q: %v", name, err)
+	}
+
+	http.Redirect(w, r, "/peer/edit?name="+name, http.StatusFound)
 }
 
 func (a *App) handleUpdatePeer(w http.ResponseWriter, r *http.Request) {

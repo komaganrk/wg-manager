@@ -102,6 +102,22 @@
         </div>
       </form>
     </div>
+
+    {{if gt (len .Subnets) 1}}
+    <div class="card" style="margin-top:1rem;">
+      <label>Group: <strong>{{.CurrentGroup}}</strong></label>
+      <form method="POST" action="/peer/move" style="display:flex; gap:.5rem; margin-top:.5rem;">
+        <input type="hidden" name="name" value="{{.Peer.Name}}">
+        <select name="group" style="flex:1; padding:.45rem .75rem; border:1px solid #d1d5db; border-radius:6px;">
+          {{range .Subnets}}
+          <option value="{{.Name}}" {{if eq .Name $.CurrentGroup}}selected{{end}}>{{.Name}} ({{.CIDR}})</option>
+          {{end}}
+        </select>
+        <button type="submit" class="btn btn-primary" style="flex:0;">Move</button>
+      </form>
+      <p class="hint">Moving assigns the next free IP in the chosen group and updates the peer's live AllowedIPs. The peer must re-download/re-import its config afterward to pick up the new routes.</p>
+    </div>
+    {{end}}
   </div>
 </body>
 </html>
